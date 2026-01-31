@@ -38,6 +38,12 @@ type = "full"
 ; Backups will be stored at: bucket/path/backup-filename.tar.gz
 path = "my-cpanel-account"
 
+; Multipart upload settings
+; multipart_threshold_mb: Files larger than this use multipart upload (default: 20)
+; multipart_chunk_mb: Size of each upload chunk in MB (default: 50)
+multipart_threshold_mb = 20
+multipart_chunk_mb = 50
+
 [notification]
 ; Email for backup reports (leave empty to disable)
 email = "your-email@example.com"
@@ -79,6 +85,8 @@ bucket = "cpanel-backups"
 access_key = "your_minio_access_key"
 secret_key = "your_minio_secret_key"
 use_path_style = true
+; SSL certificate verification (true = verify, false = allow self-signed certs)
+verify_ssl = false
 ; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
 retention_days = 30
 ; Notification: When to send email for this destination
@@ -97,6 +105,8 @@ bucket = "your-b2-bucket"
 access_key = "your_b2_keyID"
 secret_key = "your_b2_applicationKey"
 use_path_style = true
+; SSL certificate verification (true for production services)
+verify_ssl = true
 ; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
 retention_days = 90
 ; Notification: When to send email for this destination
@@ -111,6 +121,8 @@ bucket = "your-s3-bucket"
 access_key = "your_aws_access_key"
 secret_key = "your_aws_secret_key"
 use_path_style = false
+; SSL certificate verification (true for production services)
+verify_ssl = true
 ; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
 retention_days = 30
 ; Notification: When to send email for this destination
@@ -125,6 +137,8 @@ bucket = "your-wasabi-bucket"
 access_key = "your_wasabi_access_key"
 secret_key = "your_wasabi_secret_key"
 use_path_style = true
+; SSL certificate verification (true for production services)
+verify_ssl = true
 ; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
 retention_days = 365
 ; Notification: When to send email for this destination

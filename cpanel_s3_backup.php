@@ -63,6 +63,8 @@ $notify = $config['notification'] ?? [];
 $backup_config['type'] = $backup_config['type'] ?? 'full';
 // Note: retention_days is now per-destination in [destination:*] sections
 $storage_config['path'] = trim($storage_config['path'] ?? '', '/');
+$storage_config['multipart_threshold_mb'] = (int)($storage_config['multipart_threshold_mb'] ?? 20);
+$storage_config['multipart_chunk_mb'] = (int)($storage_config['multipart_chunk_mb'] ?? 50);
 $notify['debug'] = filter_var($notify['debug'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
 // Parse destination sections
@@ -74,6 +76,7 @@ foreach ($config as $section => $values) {
         if ($enabled) {
             $values['name'] = $name;
             $values['use_path_style'] = filter_var($values['use_path_style'] ?? true, FILTER_VALIDATE_BOOLEAN);
+            $values['verify_ssl'] = filter_var($values['verify_ssl'] ?? true, FILTER_VALIDATE_BOOLEAN);
             $values['notify'] = strtolower(trim($values['notify'] ?? 'always'));
             // Validate notify setting
             if (!in_array($values['notify'], ['always', 'on_error', 'never'])) {
@@ -91,7 +94,7 @@ if (empty($destinations)) {
 // Initialize stats
 $GLOBALS['stats'] = [
     'start_time' => date('Y-m-d H:i:s'),
-    'temp_dir' => sys_get_temp_dir() . '/cpanel_backup_' . uniqid(),
+    'temp_dir' => null, // Only created if HTTP download fallback is needed
     'destinations' => [],
 ];
 
@@ -170,7 +173,7 @@ try {
         $GLOBALS['stats']['destinations'][$name] = ['status' => 'pending'];
 
         try {
-            $object_key = upload_to_destination($backup_file, $dest, $storage_config['path']);
+            $object_key = upload_to_destination($backup_file, $dest, $storage_config);
             $GLOBALS['stats']['destinations'][$name] = [
                 'status' => 'success',
                 'key' => $object_key,
@@ -223,9 +226,11 @@ if ($GLOBALS['stats']['success'] && ($backup_config['cpanel_retention_days'] ?? 
     // -1 or not set = keep forever (do nothing)
 }
 
-// Cleanup temp directory (only contains files if HTTP download was used)
-@array_map('unlink', glob($GLOBALS['stats']['temp_dir'] . '/*'));
-@rmdir($GLOBALS['stats']['temp_dir']);
+// Cleanup temp directory (only if it was created for HTTP download fallback)
+if ($GLOBALS['stats']['temp_dir'] && is_dir($GLOBALS['stats']['temp_dir'])) {
+    @array_map('unlink', glob($GLOBALS['stats']['temp_dir'] . '/*'));
+    @rmdir($GLOBALS['stats']['temp_dir']);
+}
 
 $GLOBALS['stats']['end_time'] = date('Y-m-d H:i:s');
 
@@ -477,9 +482,7 @@ function list_home_directory($cp) {
 }
 
 function download_backup($cp, $backup_filename) {
-    log_msg("Downloading backup: {$backup_filename}", 1);
-
-    $output_file = $GLOBALS['stats']['temp_dir'] . '/' . basename($backup_filename);
+    log_msg("Accessing backup: {$backup_filename}", 1);
 
     // Method 1: Direct filesystem access (if script runs on cPanel server)
     // The backup file is in the user's home directory
@@ -491,14 +494,24 @@ function download_backup($cp, $backup_filename) {
         $size = filesize($direct_path);
 
         if ($size > 1048576) {
-            // Copy to temp directory (or we could just return the path directly)
-            // Return the direct path to avoid copying large files
             log_msg("Backup file accessible: " . round($size / 1024 / 1024, 2) . " MB", 1);
             return $direct_path;
         }
     }
 
-    // Method 2: Try HTTP download methods if direct access failed
+    // Method 2: Try HTTP download methods if direct access failed (script on different server)
+    log_msg("Direct access failed, attempting HTTP download fallback...", 1);
+    
+    // Create temp directory for HTTP download
+    if (!$GLOBALS['stats']['temp_dir']) {
+        $GLOBALS['stats']['temp_dir'] = sys_get_temp_dir() . '/cpanel_backup_' . uniqid();
+        if (!mkdir($GLOBALS['stats']['temp_dir'], 0700, true)) {
+            throw new Exception("Failed to create temp directory: {$GLOBALS['stats']['temp_dir']}");
+        }
+        log_msg("Created temp directory: {$GLOBALS['stats']['temp_dir']}", 2);
+    }
+    
+    $output_file = $GLOBALS['stats']['temp_dir'] . '/' . basename($backup_filename);
     $secure = filter_var($cp['secure'] ?? true, FILTER_VALIDATE_BOOLEAN);
     $protocol = $secure ? 'https' : 'http';
     $port = $secure ? 2083 : 2082;
@@ -696,16 +709,19 @@ function cleanup_old_homedir_backups($cp, $retention_days) {
 // S3 UPLOAD FUNCTIONS (AWS Signature V4)
 // ============================================================================
 
-function upload_to_destination($file_path, $dest, $storage_path) {
+function upload_to_destination($file_path, $dest, $storage_config) {
     $filename = basename($file_path);
+    $storage_path = $storage_config['path'] ?? '';
     $object_key = $storage_path ? "{$storage_path}/{$filename}" : $filename;
 
     $file_size = filesize($file_path);
-    $multipart_threshold = 100 * 1024 * 1024; // 100 MB
+    $threshold_mb = $storage_config['multipart_threshold_mb'] ?? 20;
+    $chunk_mb = $storage_config['multipart_chunk_mb'] ?? 50;
+    $multipart_threshold = $threshold_mb * 1024 * 1024;
 
     if ($file_size > $multipart_threshold) {
-        log_msg("Using multipart upload for large file ({$file_size} bytes)", 2);
-        return s3_multipart_upload($dest, $object_key, $file_path);
+        log_msg("Using multipart upload for large file (" . round($file_size / 1024 / 1024, 2) . " MB, threshold: {$threshold_mb} MB)", 2);
+        return s3_multipart_upload($dest, $object_key, $file_path, $chunk_mb);
     } else {
         return s3_put_object($dest, $object_key, $file_path);
     }
@@ -837,13 +853,16 @@ function s3_put_object($dest, $object_key, $file_path) {
     
     $sign = s3_sign_request($dest, 'PUT', $canonical_uri, [], $headers, $payload_hash);
     
+    $verify_ssl = $dest['verify_ssl'] ?? true;
+    
     $ch = curl_init();
     curl_setopt_array($ch, [
         CURLOPT_URL => $url,
         CURLOPT_CUSTOMREQUEST => 'PUT',
         CURLOPT_POSTFIELDS => $file_content,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => $verify_ssl,
+        CURLOPT_SSL_VERIFYHOST => $verify_ssl ? 2 : 0,
         CURLOPT_TIMEOUT => 7200,
         CURLOPT_HTTPHEADER => [
             "Authorization: {$sign['authorization']}",
@@ -875,11 +894,12 @@ function s3_put_object($dest, $object_key, $file_path) {
     return $object_key;
 }
 
-function s3_multipart_upload($dest, $object_key, $file_path) {
+function s3_multipart_upload($dest, $object_key, $file_path, $chunk_mb = 50) {
     $info = get_endpoint_info($dest);
     $bucket = $dest['bucket'];
     $use_path_style = $dest['use_path_style'] ?? true;
-    $part_size = 50 * 1024 * 1024; // 50 MB parts
+    $verify_ssl = $dest['verify_ssl'] ?? true;
+    $part_size = $chunk_mb * 1024 * 1024; // Configurable chunk size in MB
 
     // Build base URL and canonical URI
     if ($use_path_style) {
@@ -904,7 +924,8 @@ function s3_multipart_upload($dest, $object_key, $file_path) {
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => '',
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => $verify_ssl,
+        CURLOPT_SSL_VERIFYHOST => $verify_ssl ? 2 : 0,
         CURLOPT_HTTPHEADER => [
             "Authorization: {$sign['authorization']}",
             "Host: {$host}",
@@ -967,7 +988,8 @@ function s3_multipart_upload($dest, $object_key, $file_path) {
             CURLOPT_CUSTOMREQUEST => 'PUT',
             CURLOPT_POSTFIELDS => $part_data,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYPEER => $verify_ssl,
+            CURLOPT_SSL_VERIFYHOST => $verify_ssl ? 2 : 0,
             CURLOPT_TIMEOUT => 3600,
             CURLOPT_HEADER => true,
             CURLOPT_HTTPHEADER => [
@@ -1038,7 +1060,8 @@ function s3_multipart_upload($dest, $object_key, $file_path) {
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => $complete_xml,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => $verify_ssl,
+        CURLOPT_SSL_VERIFYHOST => $verify_ssl ? 2 : 0,
         CURLOPT_HTTPHEADER => [
             "Authorization: {$sign['authorization']}",
             "Content-Length: {$content_length}",
@@ -1065,6 +1088,7 @@ function s3_abort_multipart_upload($dest, $object_key, $upload_id) {
     $info = get_endpoint_info($dest);
     $bucket = $dest['bucket'];
     $use_path_style = $dest['use_path_style'] ?? true;
+    $verify_ssl = $dest['verify_ssl'] ?? true;
 
     if ($use_path_style) {
         $base_url = "{$info['scheme']}://{$info['host']}{$info['port_suffix']}/{$bucket}/{$object_key}";
@@ -1087,7 +1111,8 @@ function s3_abort_multipart_upload($dest, $object_key, $upload_id) {
         CURLOPT_URL => $abort_url,
         CURLOPT_CUSTOMREQUEST => 'DELETE',
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => $verify_ssl,
+        CURLOPT_SSL_VERIFYHOST => $verify_ssl ? 2 : 0,
         CURLOPT_HTTPHEADER => [
             "Authorization: {$sign['authorization']}",
             "Host: {$host}",
@@ -1144,6 +1169,7 @@ function s3_list_objects($dest, $prefix = '') {
     $info = get_endpoint_info($dest);
     $bucket = $dest['bucket'];
     $use_path_style = $dest['use_path_style'] ?? true;
+    $verify_ssl = $dest['verify_ssl'] ?? true;
     
     $query_params = ['list-type' => '2'];
     if ($prefix) {
@@ -1169,7 +1195,8 @@ function s3_list_objects($dest, $prefix = '') {
     curl_setopt_array($ch, [
         CURLOPT_URL => $url,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => $verify_ssl,
+        CURLOPT_SSL_VERIFYHOST => $verify_ssl ? 2 : 0,
         CURLOPT_HTTPHEADER => [
             "Authorization: {$sign['authorization']}",
             "Host: {$host}",
@@ -1203,6 +1230,7 @@ function s3_delete_object($dest, $object_key) {
     $info = get_endpoint_info($dest);
     $bucket = $dest['bucket'];
     $use_path_style = $dest['use_path_style'] ?? true;
+    $verify_ssl = $dest['verify_ssl'] ?? true;
     
     if ($use_path_style) {
         $url = "{$info['scheme']}://{$info['host']}{$info['port_suffix']}/{$bucket}/{$object_key}";
@@ -1224,7 +1252,8 @@ function s3_delete_object($dest, $object_key) {
         CURLOPT_URL => $url,
         CURLOPT_CUSTOMREQUEST => 'DELETE',
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => $verify_ssl,
+        CURLOPT_SSL_VERIFYHOST => $verify_ssl ? 2 : 0,
         CURLOPT_HTTPHEADER => [
             "Authorization: {$sign['authorization']}",
             "Host: {$host}",

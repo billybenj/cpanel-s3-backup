@@ -61,8 +61,9 @@ bucket = "cpanel-backups"
 access_key = "your_minio_access_key"
 secret_key = "your_minio_secret_key"
 use_path_style = true
-retention_days = 30  ; Delete backups older than 30 days
-notify = "always"    ; Send email on every backup
+verify_ssl = false       ; Allow self-signed certificates
+retention_days = 30      ; Delete backups older than 30 days
+notify = "always"        ; Send email on every backup
 
 [destination:backblaze]
 enabled = true
@@ -73,9 +74,26 @@ bucket = "your-b2-bucket"
 access_key = "your_b2_keyID"
 secret_key = "your_b2_applicationKey"
 use_path_style = true
-retention_days = 90    ; Keep for 90 days
-notify = "on_error"    ; Only notify if this destination fails
+verify_ssl = true        ; Verify SSL certificate (recommended for production)
+retention_days = 90      ; Keep for 90 days
+notify = "on_error"      ; Only notify if this destination fails
 ```
+
+### Upload Performance
+
+Control multipart upload behavior in the `[storage]` section:
+
+```ini
+[storage]
+path = "my-cpanel-account"
+multipart_threshold_mb = 20   ; Files larger than this use multipart upload (default: 20)
+multipart_chunk_mb = 50       ; Size of each upload chunk in MB (default: 50)
+```
+
+**Recommendations:**
+- **Slow connections:** Lower `multipart_chunk_mb` to 20-30 MB to avoid timeouts
+- **Fast connections:** Increase to 100+ MB for better performance
+- **Small backups:** Raise `multipart_threshold_mb` if your backups are typically <100 MB
 
 ### Retention Policies
 
@@ -162,10 +180,28 @@ php cpanel_s3_backup.php
 The script waits for backup file size to remain unchanged for 90 seconds (3 consecutive checks) to ensure cPanel has finished writing the file.
 
 ### Multipart Upload
-Files larger than 100 MB are uploaded in 50 MB chunks using S3 multipart upload protocol for efficiency and reliability.
+Files larger than the configured threshold (default: 20 MB) are uploaded in configurable chunks (default: 50 MB) using S3 multipart upload protocol for efficiency and reliability. Both values can be customized in the `[storage]` section.
 
 ### Direct Filesystem Access
-When running on the cPanel server itself, the script accesses backup files directly from `/home/username/` instead of downloading via HTTP.
+When running on the cPanel server itself, the script accesses backup files directly from `/home/username/` instead of downloading via HTTP. This eliminates memory overhead and temp directory usage.
+
+**Temp directory behavior:**
+- ✅ **Local execution:** No temp directory created (direct filesystem access)
+- ⚠️ **Remote execution:** Temp directory created only when HTTP download fallback is needed
+
+### SSL Certificate Verification
+Each destination can independently control SSL certificate verification via the `verify_ssl` setting:
+- **`verify_ssl = true`** (default): Verifies SSL certificates — recommended for production services (AWS, Backblaze, Wasabi)
+- **`verify_ssl = false`**: Allows self-signed certificates — useful for self-hosted MinIO/TrueNAS
+
+If SSL verification fails with production services, ensure your server's CA certificates are up to date:
+```bash
+# Update CA certificates (Ubuntu/Debian)
+sudo apt update && sudo apt install ca-certificates
+
+# Update CA certificates (CentOS/RHEL)
+sudo yum update ca-certificates
+```
 
 ## Troubleshooting
 
