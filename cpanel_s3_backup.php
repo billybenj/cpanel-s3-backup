@@ -74,6 +74,11 @@ foreach ($config as $section => $values) {
         if ($enabled) {
             $values['name'] = $name;
             $values['use_path_style'] = filter_var($values['use_path_style'] ?? true, FILTER_VALIDATE_BOOLEAN);
+            $values['notify'] = strtolower(trim($values['notify'] ?? 'always'));
+            // Validate notify setting
+            if (!in_array($values['notify'], ['always', 'on_error', 'never'])) {
+                $values['notify'] = 'always'; // Default to always if invalid
+            }
             $destinations[$name] = $values;
         }
     }
@@ -234,9 +239,31 @@ foreach ($GLOBALS['stats']['destinations'] as $d) {
 
 log_msg("=== Complete: {$success_count} succeeded, {$fail_count} failed ===");
 
-// Send notification
+// Send notification (only if global email set AND at least one destination wants notification)
 if (!empty($notify['email'])) {
-    send_notification($notify, $log, $storage_config);
+    $should_notify = false;
+    $notify_reasons = [];
+    
+    foreach ($GLOBALS['stats']['destinations'] as $name => $d) {
+        $dest_config = $destinations[$name] ?? [];
+        $notify_pref = $dest_config['notify'] ?? 'always';
+        
+        if ($notify_pref === 'always') {
+            $should_notify = true;
+            $notify_reasons[] = "{$name} (always)";
+        } elseif ($notify_pref === 'on_error' && $d['status'] !== 'success') {
+            $should_notify = true;
+            $notify_reasons[] = "{$name} (failed)";
+        }
+        // 'never' = skip this destination for notification
+    }
+    
+    if ($should_notify) {
+        log_msg("Sending notification: " . implode(', ', $notify_reasons), 1);
+        send_notification($notify, $log, $storage_config);
+    } else {
+        log_msg("Skipping notification: no destinations require notification based on their settings", 1);
+    }
 }
 
 // Output log

@@ -7,8 +7,9 @@ Automated backup solution for cPanel accounts that uploads to multiple S3-compat
 - **Multi-destination backups** - Upload to multiple storage providers simultaneously
 - **S3-compatible** - Works with MinIO, Backblaze B2, AWS S3, Wasabi, and others
 - **Independent retention policies** - Different retention periods for each destination
+- **Per-destination notifications** - Control email alerts per provider (always, on_error, never)
 - **Multipart upload** - Handles large files efficiently (>100 MB)
-- **Email notifications** - Detailed backup reports
+- **Email notifications** - Detailed HTML or plain-text backup reports
 - **Flexible cleanup** - Separate retention for cPanel home directory and cloud storage
 - **Comprehensive logging** - Detailed logs with rotation
 
@@ -61,6 +62,7 @@ access_key = "your_minio_access_key"
 secret_key = "your_minio_secret_key"
 use_path_style = true
 retention_days = 30  ; Delete backups older than 30 days
+notify = "always"    ; Send email on every backup
 
 [destination:backblaze]
 enabled = true
@@ -71,7 +73,8 @@ bucket = "your-b2-bucket"
 access_key = "your_b2_keyID"
 secret_key = "your_b2_applicationKey"
 use_path_style = true
-retention_days = 90  ; Keep for 90 days
+retention_days = 90    ; Keep for 90 days
+notify = "on_error"    ; Only notify if this destination fails
 ```
 
 ### Retention Policies
@@ -90,6 +93,46 @@ cpanel_retention_days = 7   ; Keep for 7 days
 retention_days = 0   ; Keep forever
 retention_days = 30  ; Delete backups older than 30 days
 ```
+
+### Email Notifications
+
+**Per-Destination Notification Control:**
+
+Each destination can independently control when it triggers email notifications:
+
+```ini
+[destination:minio]
+notify = "always"    ; Send email on every backup (success or failure)
+
+[destination:backblaze]
+notify = "on_error"  ; Only send email if this destination fails
+
+[destination:aws]
+notify = "never"     ; Never send email for this destination
+```
+
+**How it works:**
+- Email is sent if **any** destination matches its notification preference
+- One consolidated email shows all destinations (for context)
+- Email subject shows overall status: ✓ SUCCESS, ⚠ PARTIAL, or ✗ FAILED
+
+**Examples:**
+
+| Scenario | MinIO (always) | B2 (on_error) | Result |
+|----------|----------------|---------------|---------|
+| All succeed | ✓ Success | ✓ Success | **Email sent** (MinIO=always) |
+| B2 fails | ✓ Success | ✗ Failed | **Email sent** (both: MinIO=always, B2=failed) |
+| All set to "never" | — | — | **No email** |
+
+**Global email setting:**
+```ini
+[notification]
+email = "your-email@example.com"  ; Must be set for any notifications
+from_email = "backup@your-domain.com"
+html_email = true
+```
+
+If `email` is empty, no notifications are sent regardless of destination settings.
 
 ## Usage
 

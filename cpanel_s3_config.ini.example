@@ -81,6 +81,11 @@ secret_key = "your_minio_secret_key"
 use_path_style = true
 ; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
 retention_days = 30
+; Notification: When to send email for this destination
+;   always   = Send email on every backup (success or failure)
+;   on_error = Only send email if this destination fails
+;   never    = Never send email for this destination
+notify = "always"
 
 ; --- Backblaze B2 (S3-compatible mode) ---
 [destination:backblaze]
@@ -94,6 +99,8 @@ secret_key = "your_b2_applicationKey"
 use_path_style = true
 ; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
 retention_days = 90
+; Notification: When to send email for this destination
+notify = "on_error"
 
 ; --- AWS S3 (optional) ---
 [destination:aws]
@@ -106,6 +113,8 @@ secret_key = "your_aws_secret_key"
 use_path_style = false
 ; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
 retention_days = 30
+; Notification: When to send email for this destination
+notify = "on_error"
 
 ; --- Wasabi (optional) ---
 [destination:wasabi]
@@ -118,6 +127,8 @@ secret_key = "your_wasabi_secret_key"
 use_path_style = true
 ; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
 retention_days = 365
+; Notification: When to send email for this destination
+notify = "on_error"
 
 ; =========================================================================
 ; You can add more destinations by copying a section above and changing
