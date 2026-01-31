@@ -1,0 +1,19 @@
+# Configuration files with credentials
+*.ini
+!*.ini.example
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*~

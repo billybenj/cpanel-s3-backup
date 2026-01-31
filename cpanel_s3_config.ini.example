@@ -1,0 +1,125 @@
+; cPanel S3-Compatible Backup Configuration
+; ==========================================
+; SECURITY: chmod 600 this file
+; Place OUTSIDE public_html
+;
+; Supports multiple storage destinations - backup is created once,
+; then uploaded to all enabled destinations.
+
+[cpanel]
+; Your cPanel username
+username = "your_cpanel_username"
+
+; API Token (recommended) - create at cPanel > Security > Manage API Tokens
+api_token = "your_api_token_here"
+
+; Or use password (less secure)
+; password = "your_cpanel_password"
+
+; Your cPanel domain (without https://)
+domain = "your-server.com"
+
+; Use HTTPS (true/false)
+secure = true
+
+[backup]
+; Backup type: full, home, mysql
+type = "full"
+
+; cPanel home directory retention:
+;   -1 or omit = keep forever (never delete from home directory)
+;    0 = delete immediately after successful upload to S3
+;   >0 = keep backups for X days, delete older ones
+; cpanel_retention_days = -1
+
+[storage]
+; Path/folder in bucket where backups are stored
+; Use this to organize by account, e.g.: "clientname" or "site1/backups"
+; Backups will be stored at: bucket/path/backup-filename.tar.gz
+path = "my-cpanel-account"
+
+[notification]
+; Email for backup reports (leave empty to disable)
+email = "your-email@example.com"
+
+; From address
+from_email = "backup@your-domain.com"
+
+; Identifier shown in email subject
+server_id = "my-cpanel-account"
+
+; HTML formatted emails (true/false)
+html_email = true
+
+; Debug mode - show verbose output (file sizes, upload progress, etc.)
+; false = basic output (start, complete, errors only)
+; true = detailed output (every file found, each upload part, etc.)
+debug = false
+
+; Log file settings (log file is created in same directory as script)
+; log_max_mb = 5       ; Rotate when log exceeds this size (default: 5 MB)
+; log_keep_files = 3   ; Number of rotated logs to keep (default: 3)
+
+; =========================================================================
+; STORAGE DESTINATIONS
+; =========================================================================
+; Define multiple destinations using [destination:name] sections
+; Set enabled = true/false to control which destinations receive backups
+;
+; Supported providers: minio, backblaze, aws, wasabi
+; All use S3-compatible API with AWS Signature V4
+
+; --- MinIO (TrueNAS/Self-hosted) ---
+[destination:minio]
+enabled = true
+provider = "minio"
+endpoint = "https://your-truenas-ip:9000"
+region = "us-east-1"
+bucket = "cpanel-backups"
+access_key = "your_minio_access_key"
+secret_key = "your_minio_secret_key"
+use_path_style = true
+; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
+retention_days = 30
+
+; --- Backblaze B2 (S3-compatible mode) ---
+[destination:backblaze]
+enabled = true
+provider = "backblaze"
+endpoint = "https://s3.us-west-004.backblazeb2.com"
+region = "us-west-004"
+bucket = "your-b2-bucket"
+access_key = "your_b2_keyID"
+secret_key = "your_b2_applicationKey"
+use_path_style = true
+; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
+retention_days = 90
+
+; --- AWS S3 (optional) ---
+[destination:aws]
+enabled = false
+provider = "aws"
+region = "us-east-1"
+bucket = "your-s3-bucket"
+access_key = "your_aws_access_key"
+secret_key = "your_aws_secret_key"
+use_path_style = false
+; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
+retention_days = 30
+
+; --- Wasabi (optional) ---
+[destination:wasabi]
+enabled = false
+provider = "wasabi"
+region = "us-east-1"
+bucket = "your-wasabi-bucket"
+access_key = "your_wasabi_access_key"
+secret_key = "your_wasabi_secret_key"
+use_path_style = true
+; Retention: Delete backups older than X days (0 = keep forever, -1 = no cleanup)
+retention_days = 365
+
+; =========================================================================
+; You can add more destinations by copying a section above and changing
+; the name in brackets, e.g.: [destination:minio-offsite]
+; =========================================================================
