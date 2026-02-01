@@ -136,11 +136,6 @@ function log_msg($message, $indent = 0) {
     @file_put_contents($log_file, $entry . "\n", FILE_APPEND | LOCK_EX);
 }
 
-// Create temp directory
-if (!mkdir($GLOBALS['stats']['temp_dir'], 0700, true)) {
-    die("Failed to create temp directory.\n");
-}
-
 // ============================================================================
 // MAIN EXECUTION
 // ============================================================================
