@@ -650,33 +650,28 @@ function download_file_curl($url, $output_file, $cp, $use_auth_header) {
 }
 
 function delete_backup_from_homedir($cp, $backup_filename) {
-    $secure = filter_var($cp['secure'] ?? true, FILTER_VALIDATE_BOOLEAN);
-    $protocol = $secure ? 'https' : 'http';
-    $port = $secure ? 2083 : 2082;
-
-    // Use UAPI Fileman::delete_files - empty dir = home directory
-    $url = "{$protocol}://{$cp['domain']}:{$port}/execute/Fileman/delete_files?dir=&files=" . rawurlencode($backup_filename);
-
-    $ch = curl_init();
-    curl_setopt_array($ch, [
-        CURLOPT_URL => $url,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => 0,
-    ]);
-
-    if (!empty($cp['api_token'])) {
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            "Authorization: cpanel {$cp['username']}:{$cp['api_token']}"
-        ]);
-    } else {
-        curl_setopt($ch, CURLOPT_USERPWD, "{$cp['username']}:{$cp['password']}");
+    // Direct filesystem deletion (script runs on cPanel server with account access)
+    $home_dir = "/home/{$cp['username']}";
+    $file_path = "{$home_dir}/{$backup_filename}";
+    
+    if (!file_exists($file_path)) {
+        log_msg("File not found for deletion: {$backup_filename}", 2);
+        return false;
     }
-
-    $response = curl_exec($ch);
-    curl_close($ch);
-
-    log_msg("Deleted {$backup_filename} from home directory", 2);
+    
+    if (!is_writable($file_path)) {
+        log_msg("No write permission for {$backup_filename} (check file ownership/permissions)", 1);
+        return false;
+    }
+    
+    if (@unlink($file_path)) {
+        log_msg("Deleted {$backup_filename} from home directory", 2);
+        return true;
+    } else {
+        $error = error_get_last();
+        log_msg("Failed to delete {$backup_filename}: " . ($error['message'] ?? 'unknown error'), 1);
+        return false;
+    }
 }
 
 function cleanup_old_homedir_backups($cp, $retention_days) {
@@ -690,10 +685,12 @@ function cleanup_old_homedir_backups($cp, $retention_days) {
         $mtime = $file['mtime'] ?? 0;
 
         // Only delete backup tar.gz files older than retention period
-        if (preg_match('/^backup-.*\.tar\.gz$/i', $filename) && $mtime < $cutoff_time) {
-            log_msg("Deleting old backup: {$filename} (age: " . round((time() - $mtime) / 86400) . " days)", 2);
-            delete_backup_from_homedir($cp, $filename);
-            $deleted++;
+        if (preg_match('/^backup-.*\.tar\.gz$/i', $filename) && $mtime <= $cutoff_time) {
+            $age_days = round((time() - $mtime) / 86400);
+            log_msg("Deleting old backup: {$filename} (age: {$age_days} days)", 1);
+            if (delete_backup_from_homedir($cp, $filename)) {
+                $deleted++;
+            }
         }
     }
 
@@ -1146,7 +1143,7 @@ function cleanup_old_backups($dest, $storage_path, $retention_days) {
         }
         
         $last_modified = strtotime($obj['LastModified']);
-        if ($last_modified < $cutoff_time) {
+        if ($last_modified <= $cutoff_time) {
             try {
                 if (s3_delete_object($dest, $obj['Key'])) {
                     $deleted++;
